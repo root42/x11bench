@@ -17,12 +17,13 @@
 #include <sys/time.h>
 #include <X11/Xlib.h>
 
-#define NUM_OPS        1000000
 #define DEFAULT_WIDTH  512
 #define DEFAULT_HEIGHT 512
 #define MIN_SIZE       64
 #define MAX_SIZE       4096
 #define CHECKER_SQ     16   /* checkerboard square size in the blit source */
+
+#define DEFAULT_NUM_OPS   1000
 
 /* Random state for LCG */
 static unsigned int random_state = 0x12345678ULL;
@@ -119,12 +120,13 @@ static const struct test_ops tests[] = {
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: x11bench [-d display] [-w width] [-h height]\n");
+    fprintf(stderr, "usage: x11bench [-d display] [-w width] [-h height] [-n num_ops]\n");
 }
 
 int main(int argc, char **argv)
 {
     const char *dpy_name = 0;
+    int num_ops = DEFAULT_NUM_OPS;
     int width = DEFAULT_WIDTH;
     int height = DEFAULT_HEIGHT;
     Display *dpy;
@@ -144,6 +146,8 @@ int main(int argc, char **argv)
             width = atoi(argv[++i]);
         else if (strcmp(argv[i], "-h") == 0 && i + 1 < argc)
             height = atoi(argv[++i]);
+        else if (strcmp(argv[i], "-n") == 0 && i + 1 < argc)
+            num_ops = atoi(argv[++i]);
         else {
             usage();
             return EXIT_FAILURE;
@@ -193,7 +197,7 @@ int main(int argc, char **argv)
     printf("x11bench: %s screen %d, %d bits/pixel\n",
            XDisplayName(dpy_name), screen, depth);
     printf("%d operations per test, %dx%d test window\n\n",
-           NUM_OPS, width, height);
+           num_ops, width, height);
     printf("%-20s %12s %12s %12s\n",
            "test", "total (ms)", "per-op (us)", "rate (ops/s)");
 
@@ -205,7 +209,7 @@ int main(int argc, char **argv)
         XClearWindow(dpy, win);
         XSync(dpy, False);
         gettimeofday(&t0, 0);
-        for (j = 0; j < NUM_OPS; j++)
+        for (j = 0; j < num_ops; j++)
             tests[i].op(dpy, win, gc, src, width, height);
         /* The calls above only queue requests; wait for the server
          * to finish drawing before stopping the clock. */
@@ -218,8 +222,8 @@ int main(int argc, char **argv)
         printf("%-20s %12.3f %12.2f %12.0f\n",
                tests[i].name,
                total_us / 1000.0,
-               total_us / (double) NUM_OPS,
-               (double) NUM_OPS * 1000000.0 / (double) total_us);
+               total_us / (double) num_ops,
+               (double) num_ops * 1000000.0 / (double) total_us);
     }
 
     XFreePixmap(dpy, src);
