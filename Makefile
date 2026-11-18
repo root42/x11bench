@@ -9,7 +9,7 @@ x11bench: x11bench.c
 
 # Build with -std=c89 -pedantic to make sure the source stays old-school.
 check: x11bench.c
-	$(CC) -std=c89 -pedantic -Wall -c x11bench.c && rm -f x11bench.o
+	$(CC) -std=c89 -pedantic -Wall -I/usr/X11/include -c x11bench.c && rm -f x11bench.o
 
 clean:
 	rm -f x11bench x11bench.o

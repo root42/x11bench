@@ -16,6 +16,7 @@
 #include <string.h>
 #include <sys/time.h>
 #include <X11/Xlib.h>
+#include <xcb/xc_misc.h>
 
 #define DEFAULT_WIDTH  512
 #define DEFAULT_HEIGHT 512
@@ -26,12 +27,12 @@
 #define DEFAULT_NUM_OPS   1000
 
 /* Random state for LCG */
-static unsigned int random_state = 0x12345678ULL;
+static unsigned int random_state = 0x12345678UL;
 
 /* C89-compatible random number generator (LCG) */
 static unsigned int my_random(void)
 {
-    random_state = (random_state * 1103515245ULL + 12345ULL) & 0x7fffffffULL;
+    random_state = (random_state * 1103515245UL + 12345UL) & 0x7fffffffUL;
     return random_state;
 }
 
@@ -46,10 +47,70 @@ static int random_range(int min, int max)
     return min + (my_random() % (max - min + 1));
 }
 
+/* Get a random color for the given display and screen.
+ * Returns a color value that is valid for the display's colormap.
+ * For PseudoColor visual, it uses XAllocColor to allocate a random
+ * color from the colormap. The function uses a seeded random generator
+ * to choose RGB values, which are then used to allocate the color.
+ * For TrueColor and StaticGray/GrayScale, it generates a random pixel value.
+ */
+static unsigned long get_random_color(Display *dpy, int screen)
+{
+    Visual *visual = XDefaultVisual(dpy, screen);
+    int visual_class = visual->class;
+    Colormap cmap = DefaultColormap(dpy, screen);
+    XColor xcolor;
+
+    if (visual_class == PseudoColor) {
+        /* For PseudoColor, allocate a random color from the colormap.
+         * The color is chosen by randomizing the RGB values.
+         * Note: In X11R5, XColor has 16-bit RGB fields (0-65535). */
+        xcolor.red = my_random() % 65535;
+        xcolor.green = my_random() % 65535;
+        xcolor.blue = my_random() % 65535;
+        xcolor.flags = DoRed | DoGreen | DoBlue;
+
+        /* Try to allocate the color. If it fails, try again with new random values.
+         * This is a simple retry loop; in practice, with a good random generator,
+         * the likelihood of collision is low. */
+        {
+            unsigned long max_attempts = 100;
+            unsigned long attempts = 0;
+            unsigned long pixel = 0;
+
+            while (attempts < max_attempts) {
+                if (XAllocColor(dpy, cmap, &xcolor) == Success) {
+                    pixel = xcolor.pixel;
+                    break;
+                }
+                /* Retry with new random values */
+                xcolor.red = my_random() % 65535;
+                xcolor.green = my_random() % 65535;
+                xcolor.blue = my_random() % 65535;
+                xcolor.flags = DoRed | DoGreen | DoBlue;
+                attempts++;
+            }
+
+            /* If we couldn't allocate a color after max_attempts, return the last pixel.
+             * This is not a valid color, but it's better than failing. */
+            if (attempts >= max_attempts) {
+                fprintf(stderr,
+                        "x11bench: colormap exhausted after %lu attempts, using fallback\n",
+                        max_attempts);
+            }
+            return pixel;
+        }
+    } else {
+        /* For TrueColor and StaticGray/GrayScale, generate random pixel value */
+        return (unsigned long)(my_random() & 0xffffffffL);
+
+    }
+}
+
 struct test_ops {
     const char *name;
     void (*op)(Display *dpy, Window win, GC gc, Window src,
-               int width, int height);
+               int width, int height, int screen);
 };
 
 static long elapsed_us(const struct timeval *start, const struct timeval *end)
@@ -65,48 +126,62 @@ static long elapsed_us(const struct timeval *start, const struct timeval *end)
 }
 
 static void op_line(Display *dpy, Window win, GC gc, Window src,
-                    int width, int height)
+                    int width, int height, int screen)
 {
     (void) src;
-    int x1 = random_range(0, width - 1);
-    int y1 = random_range(0, height - 1);
-    int x2 = random_range(x1 + 1, width);
-    int y2 = random_range(y1 + 1, height);
-    XDrawLine(dpy, win, gc, x1, y1, x2, y2);
+    {
+        int x1 = random_range(0, width - 1);
+        int y1 = random_range(0, height - 1);
+        int x2 = random_range(x1 + 1, width);
+        int y2 = random_range(y1 + 1, height);
+
+        XSetForeground(dpy, gc, get_random_color(dpy, screen));
+        XDrawLine(dpy, win, gc, x1, y1, x2, y2);
+    }
 }
 
 static void op_rect(Display *dpy, Window win, GC gc, Window src,
-                    int width, int height)
+                    int width, int height, int screen)
 {
     (void) src;
-    int x = random_range(0, width - 1);
-    int y = random_range(0, height - 1);
-    int w = random_range(MIN_SIZE, width / 2);
-    int h = random_range(MIN_SIZE, height / 2);
-    XFillRectangle(dpy, win, gc, x, y, w, h);
+    {
+        int x = random_range(0, width - 1);
+        int y = random_range(0, height - 1);
+        int w = random_range(MIN_SIZE, width / 2);
+        int h = random_range(MIN_SIZE, height / 2);
+
+        XSetForeground(dpy, gc, get_random_color(dpy, screen));
+        XFillRectangle(dpy, win, gc, x, y, w, h);
+    }
 }
 
 static void op_arc(Display *dpy, Window win, GC gc, Window src,
-                   int width, int height)
+                   int width, int height, int screen)
 {
     int d = random_range(MIN_SIZE, (width < height ? width : height) / 2);
     int x = random_range(0, width - 2 * d);
     int y = random_range(0, height - 2 * d);
 
     (void) src;
-    XFillArc(dpy, win, gc, x, y, 2 * d, 2 * d, 0, 360 * 64);
+    {
+        XSetForeground(dpy, gc, get_random_color(dpy, screen));
+        XFillArc(dpy, win, gc, x, y, 2 * d, 2 * d, 0, 360 * 64);
+    }
 }
 
 static void op_blit(Display *dpy, Window win, GC gc, Window src,
-                    int width, int height)
+                    int width, int height, int screen)
 {
-    int src_x = random_range(0, width - 1);
-    int src_y = random_range(0, height - 1);
-    int src_w = random_range(MIN_SIZE, width / 2);
-    int src_h = random_range(MIN_SIZE, height / 2);
-    int dest_x = random_range(0, width - src_w);
-    int dest_y = random_range(0, height - src_h);
-    XCopyArea(dpy, src, win, gc, src_x, src_y, src_w, src_h, dest_x, dest_y);
+    (void) screen;
+    {
+        int src_x = random_range(0, width - 1);
+        int src_y = random_range(0, height - 1);
+        int src_w = random_range(MIN_SIZE, width / 2);
+        int src_h = random_range(MIN_SIZE, height / 2);
+        int dest_x = random_range(0, width - src_w);
+        int dest_y = random_range(0, height - src_h);
+        XCopyArea(dpy, src, win, gc, src_x, src_y, src_w, src_h, dest_x, dest_y);
+    }
 }
 
 static const struct test_ops tests[] = {
@@ -184,7 +259,7 @@ int main(int argc, char **argv)
     /* Offscreen blit source, filled with a checkerboard so the server
      * cannot optimise the copy away as a solid fill. */
     src = XCreatePixmap(dpy, win, width, height, depth);
-    for (cy = 0; cy < height; cy += CHECKER_SQ)
+    for (cy = 0; cy < height; cy += CHECKER_SQ) {
         for (cx = 0; cx < width; cx += CHECKER_SQ) {
             if (((cx / CHECKER_SQ) + (cy / CHECKER_SQ)) & 1)
                 XSetForeground(dpy, gc, WhitePixel(dpy, screen));
@@ -192,6 +267,7 @@ int main(int argc, char **argv)
                 XSetForeground(dpy, gc, BlackPixel(dpy, screen));
             XFillRectangle(dpy, src, gc, cx, cy, CHECKER_SQ, CHECKER_SQ);
         }
+    }
     XSetForeground(dpy, gc, WhitePixel(dpy, screen));
 
     printf("x11bench: %s screen %d, %d bits/pixel\n",
@@ -206,26 +282,27 @@ int main(int argc, char **argv)
         struct timeval t1;
         long total_us;
 
-        XClearWindow(dpy, win);
-        XSync(dpy, False);
-        gettimeofday(&t0, 0);
-        for (j = 0; j < num_ops; j++)
-            tests[i].op(dpy, win, gc, src, width, height);
-        /* The calls above only queue requests; wait for the server
-         * to finish drawing before stopping the clock. */
-        XSync(dpy, False);
-        gettimeofday(&t1, 0);
+        {
+            XClearWindow(dpy, win);
+            XSync(dpy, False);
+            gettimeofday(&t0, 0);
+            for (j = 0; j < num_ops; j++)
+                tests[i].op(dpy, win, gc, src, width, height, screen);
+            /* The calls above only queue requests; wait for the server
+             * to finish drawing before stopping the clock. */
+            XSync(dpy, False);
+            gettimeofday(&t1, 0);
 
-        total_us = elapsed_us(&t0, &t1);
-        if (total_us <= 0)
-            total_us = 1;
-        printf("%-20s %12.3f %12.2f %12.0f\n",
-               tests[i].name,
-               total_us / 1000.0,
-               total_us / (double) num_ops,
-               (double) num_ops * 1000000.0 / (double) total_us);
+            total_us = elapsed_us(&t0, &t1);
+            if (total_us <= 0)
+                total_us = 1;
+            printf("%-20s %12.3f %12.2f %12.0f\n",
+                   tests[i].name,
+                   total_us / 1000.0,
+                   total_us / (double) num_ops,
+                   (double) num_ops * 1000000.0 / (double) total_us);
+        }
     }
-
     XFreePixmap(dpy, src);
     XFreeGC(dpy, gc);
     XDestroyWindow(dpy, win);
